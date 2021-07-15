@@ -1,0 +1,15 @@
+Metadata-Version: 2.1
+Name: xla-add
+Version: 0.0.1
+Summary: Experimental snippets for MP Training
+Home-page: https://github.com/xx/yy
+Author: Vaibhav Singh
+Author-email: sivaibhav@google.com
+License: UNKNOWN
+Description: UNKNOWN
+Platform: UNKNOWN
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.6
+Description-Content-Type: text/markdown
