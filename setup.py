@@ -18,8 +18,8 @@ with open("README.md", "r", encoding="utf-8") as fh:
                         "Operating System :: OS Independent",
 
             ],
-                package_dir={"": "src"},
-                packages=setuptools.find_packages("src"),
+                package_dir={"": "."},
+                packages=setuptools.find_packages(exclude=('src')),
                 python_requires=">=3.6",
 
         )

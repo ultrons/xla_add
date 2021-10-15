@@ -1,8 +1,0 @@
-README.md
-setup.py
-src/xla_add/__init__.py
-src/xla_add/distributed.py
-src/xla_add.egg-info/PKG-INFO
-src/xla_add.egg-info/SOURCES.txt
-src/xla_add.egg-info/dependency_links.txt
-src/xla_add.egg-info/top_level.txt
