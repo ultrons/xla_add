@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright (c) 2019, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -24,12 +24,11 @@ from torch import _C
 from torch.cuda import _lazy_call, device as device_ctx_manager
 from torch.utils.checkpoint import detach_variable
 
+
 from .initialize import get_data_parallel_rank
-from .initialize import get_model_parallel_rank
-
-from torch.utils.checkpoint import check_backward_validity, get_device_states, set_device_states, detach_variable
-
-from fairseq import distributed_utils as dist_utils, utils
+from .initialize import get_tensor_model_parallel_group
+from .initialize import get_tensor_model_parallel_rank
+from .initialize import get_tensor_model_parallel_world_size
 
 
 # Default name for the model parallel rng tracker.
@@ -69,6 +68,36 @@ def _set_cuda_rng_state(new_state, device=-1):
     _lazy_call(cb)
 
 
+def split_tensor_into_1d_equal_chunks(tensor, new_buffer=False):
+    """Break a tensor into equal 1D chunks."""
+    partition_size = torch.numel(tensor) // \
+        get_tensor_model_parallel_world_size()
+    start_index = partition_size * get_tensor_model_parallel_rank()
+    end_index = start_index + partition_size
+    if new_buffer:
+        data = torch.empty(partition_size, dtype=tensor.dtype,
+                           device=torch.cuda.current_device(),
+                           requires_grad=False)
+        data.copy_(tensor.view(-1)[start_index:end_index])
+    else:
+        data = tensor.view(-1)[start_index:end_index]
+    return data
+    
+
+def gather_split_1d_tensor(tensor):
+    """Opposite of above function, gather values from model parallel ranks."""
+    world_size = get_tensor_model_parallel_world_size()
+    numel = torch.numel(tensor)
+    numel_gathered = world_size * numel
+    gathered = torch.empty(numel_gathered, dtype=tensor.dtype,
+                           device=torch.cuda.current_device(),
+                           requires_grad=False)
+    chunks = [gathered[i*numel:(i+1)*numel] for i in range(world_size)]
+    torch.distributed.all_gather(chunks, tensor,
+                                 group=get_tensor_model_parallel_group())
+    return gathered
+
+
 class CudaRNGStatesTracker:
     """Tracker for the cuda RNG states.
 
@@ -77,6 +106,7 @@ class CudaRNGStatesTracker:
     rng state, we can perform operations and return to our starting
     cuda state.
     """
+
     def __init__(self):
         # Map from a string name to the cuda rng state.
         self.states_ = {}
@@ -140,16 +170,12 @@ class CudaRNGStatesTracker:
 
 
 # RNG tracker object.
-# Disabled for fairseq.
-#_CUDA_RNG_STATE_TRACKER = CudaRNGStatesTracker()
-_CUDA_RNG_STATE_TRACKER = None
+_CUDA_RNG_STATE_TRACKER = CudaRNGStatesTracker()
 
 
 def get_cuda_rng_tracker():
     """Get cuda rng tracker."""
-    raise RuntimeError(
-        'Use fairseq.distributed_utils.fork_rng_for_model_parallel instead'
-    )
+    return _CUDA_RNG_STATE_TRACKER
 
 
 def model_parallel_cuda_manual_seed(seed):
@@ -163,58 +189,106 @@ def model_parallel_cuda_manual_seed(seed):
         default state: This is for data parallelism and is the same among a
                        set of model parallel GPUs but different across
                        different model paralle groups. This is used for
-                       example for dropout in the non-model-parallel regions.
-        model-parallel state: This state is different among a set of model
+                       example for dropout in the non-tensor-model-parallel regions.
+        tensor-model-parallel state: This state is different among a set of model
                               parallel GPUs, but the same across data parallel
                               groups. This is used for example for dropout in
                               model parallel regions.
     """
-    raise RuntimeError('Use fairseq.utils.set_torch_seed instead')
+    # 2718 is just for fun and any POSITIVE value will work.
+    offset = seed + 2718
+    tensor_model_parallel_seed = offset + get_tensor_model_parallel_rank()
+    # Data parallel gets the original seed.
+    data_parallel_seed = seed
+
+    if torch.distributed.get_rank() == 0:
+        print('> initializing model parallel cuda seeds on global rank {}, '
+              'model parallel rank {}, and data parallel rank {} with '
+              'model parallel seed: {} and data parallel seed: {}'.format(
+                  torch.distributed.get_rank(), get_tensor_model_parallel_rank(),
+                  get_data_parallel_rank(), tensor_model_parallel_seed,
+                  data_parallel_seed), flush=True)
+    _CUDA_RNG_STATE_TRACKER.reset()
+    # Set the default state.
+    torch.cuda.manual_seed(data_parallel_seed)
+    # and model parallel state.
+    _CUDA_RNG_STATE_TRACKER.add(_MODEL_PARALLEL_RNG_TRACKER_NAME,
+                                tensor_model_parallel_seed)
 
 
 class CheckpointFunction(torch.autograd.Function):
-
+    """This function is adapted from torch.utils.checkpoint with
+       two main changes:
+           1) torch.cuda.set_rng_state is replaced with `_set_cuda_rng_state`
+           2) the states in the model parallel tracker are also properly
+              tracked/set/reset.
+    """
     @staticmethod
-    def forward(ctx, run_function, *args):
-        check_backward_validity(args)
+    def forward(ctx, run_function, distribute_checkpointed_activations, *args):
         ctx.run_function = run_function
-        ctx.fwd_rng_state = utils.get_rng_state()
-        ctx.save_for_backward(*args)
+        ctx.distribute_checkpointed_activations \
+            = distribute_checkpointed_activations
+
+        # Copy the rng states.
+        ctx.fwd_cpu_rng_state = torch.get_rng_state()
+        ctx.fwd_cuda_rng_state = torch.cuda.get_rng_state()
+        ctx.fwd_cuda_rng_state_tracker = get_cuda_rng_tracker().get_states()
+
         with torch.no_grad():
             outputs = run_function(*args)
+
+        # Divide hidden states across model parallel group and only keep
+        # the chunk corresponding to the current rank.
+        if distribute_checkpointed_activations:
+            ctx.input_0_shape = args[0].data.shape
+            args[0].data = split_tensor_into_1d_equal_chunks(args[0].data,
+                                                             new_buffer=True)
+
+        # Store everything.
+        ctx.save_for_backward(*args)
+
         return outputs
 
     @staticmethod
     def backward(ctx, *args):
         if not torch.autograd._is_checkpoint_valid():
-            raise RuntimeError("Checkpointing is not compatible with .grad(), please use .backward() if possible")
-        inputs = detach_variable(ctx.saved_tensors)
+            raise RuntimeError("Checkpointing is not compatible with .grad(), "
+                               "please use .backward() if possible")
+        inputs = ctx.saved_tensors
+        if ctx.distribute_checkpointed_activations:
+            inputs[0].data = gather_split_1d_tensor(inputs[0].data)
+            inputs[0].data = inputs[0].data.view(ctx.input_0_shape)
 
         # Store the current states.
-        bwd_rng_state = utils.get_rng_state()
+        bwd_cpu_rng_state = torch.get_rng_state()
+        bwd_cuda_rng_state = torch.cuda.get_rng_state()
+        bwd_cuda_rng_state_tracker = get_cuda_rng_tracker().get_states()
 
         # Set the states to what it used to be before the forward pass.
-        utils.set_rng_state(ctx.fwd_rng_state)
+        torch.set_rng_state(ctx.fwd_cpu_rng_state)
+        _set_cuda_rng_state(ctx.fwd_cuda_rng_state)
+        get_cuda_rng_tracker().set_states(ctx.fwd_cuda_rng_state_tracker)
 
+        # Compute the forward pass.
+        detached_inputs = detach_variable(inputs)
         with torch.enable_grad():
-            outputs = ctx.run_function(*inputs)
+            outputs = ctx.run_function(*detached_inputs)
 
         # Set the states back to what it was at the start of this function.
-        utils.set_rng_state(bwd_rng_state)
+        torch.set_rng_state(bwd_cpu_rng_state)
+        _set_cuda_rng_state(bwd_cuda_rng_state)
+        get_cuda_rng_tracker().set_states(bwd_cuda_rng_state_tracker)
 
         if isinstance(outputs, torch.Tensor):
             outputs = (outputs,)
-
         torch.autograd.backward(outputs, args)
-
-        grads = tuple(
-            inp.grad if isinstance(inp, torch.Tensor) else inp
-            for inp in inputs
-        )
-        return (None,) + grads
+        grads = tuple(inp.grad if isinstance(inp, torch.Tensor) else inp
+                      for inp in detached_inputs)
+        return (None, None) + grads
 
 
-def checkpoint(function, *args):
+def checkpoint(function, distribute_checkpointed_activations, *args):
     """Checkpoint a model or part of the model.
     This has been directly copied from torch.utils.checkpoint."""
-    return CheckpointFunction.apply(function, *args)
+    return CheckpointFunction.apply(function,
+                                    distribute_checkpointed_activations, *args)

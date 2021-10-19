@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright (c) 2019, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,29 +15,27 @@
 
 import torch
 import torch_xla.core.xla_model as xm
+
+#from .initialize import get_tensor_model_parallel_group, get_tensor_model_parallel_world_size, get_tensor_model_parallel_rank
 from .initialize import get_model_parallel_global_group as get_model_parallel_group
 from .initialize import get_model_parallel_world_size
 from .initialize import get_model_parallel_rank
 from .initialize import get_model_parallel_world_size as get_world_size
 from .initialize import get_model_parallel_rank as get_rank
 from .utils import split_tensor_along_last_dim
-from .utils import split_tensor_along_last_dim
 
 
 def _reduce(input_):
-    """All-reduce the the input tensor across model parallel group."""
-    group = get_model_parallel_group()
+    """All-reduce the input tensor across model parallel group."""
 
     # Bypass the function if we are using only 1 GPU.
-    #if get_world_size(group=group) == 1:
-    if get_world_size() == 1:
+    if get_model_parallel_world_size()==1:
         return input_
 
     # All-reduce.
-    print(f"DEBUG: CORE:{xm.get_ordinal()}: @@@@@@@: XLA ALL REDUCE START: Group", group)
-    #xm.all_reduce(xm.REDUCE_SUM, [input_], groups=group[1])
-    xm.all_reduce(xm.REDUCE_SUM, [input_], groups=group)
-    print(f"DEBUG: CORE:{xm.get_ordinal()}:@@@@@@@: XLA ALL REDUCE DONE")
+    #torch.distributed.all_reduce(input_, group=get_model_parallel_group())
+
+    xm.all_reduce(xm.REDUCE_SUM, [input_], groups=get_model_parallel_group())
 
     return input_
 
@@ -45,20 +43,16 @@ def _reduce(input_):
 def _split(input_):
     """Split the tensor along its last dimension and keep the
     corresponding slice."""
-    group = get_model_parallel_group()
 
+    world_size = get_model_parallel_world_size()
     # Bypass the function if we are using only 1 GPU.
-    #if get_world_size(group=group) == 1:
-    if get_world_size() == 1:
+    if world_size==1:
         return input_
 
     # Split along last dimension.
-    #world_size = get_world_size(group=group)
-    world_size = get_world_size()
     input_list = split_tensor_along_last_dim(input_, world_size)
 
     # Note: torch.split does not create contiguous tensors by default.
-    #rank = get_rank(group=group)
     rank = get_rank()
     output = input_list[rank].contiguous()
 
@@ -67,24 +61,25 @@ def _split(input_):
 
 def _gather(input_):
     """Gather tensors and concatinate along the last dimension."""
-    group = get_model_parallel_group()
 
+    world_size = get_model_parallel_world_size()
     # Bypass the function if we are using only 1 GPU.
-    #if get_world_size(group=group) == 1:
-    if get_world_size() == 1:
+    if world_size==1:
         return input_
 
     # Size and dimension.
     last_dim = input_.dim() - 1
+    rank = get_rank()
 
-    #tensor_list = all_gather(tensor=input_, group=group)
-
+    tensor_list = [torch.empty_like(input_) for _ in range(world_size)]
+    tensor_list[rank] = input_
+    #torch.distributed.all_gather(tensor_list, input_, group=get_model_parallel_group())
     # Note: torch.cat already creates a contiguous tensor.
     #output = torch.cat(tensor_list, dim=last_dim).contiguous()
-    xm.master_print("DEBUG: @@@@@@@: XLA ALL GATHER START")
-    #output = xm.all_gather(input_, groups=get_model_parallel_group()[1])
     output = xm.all_gather(input_, groups=get_model_parallel_group())
-    xm.master_print("DEBUG: @@@@@@@: XLA ALL GATHER DONE")
+
+
+
 
     return output
 
@@ -93,21 +88,27 @@ class _CopyToModelParallelRegion(torch.autograd.Function):
     """Pass the input to the model parallel region."""
 
     @staticmethod
+    def symbolic(graph, input_):
+        return input_
+    
+    @staticmethod
     def forward(ctx, input_):
         return input_
 
     @staticmethod
     def backward(ctx, grad_output):
-        print(f"in backward pas for rank: {xm.get_ordinal()}")
         return _reduce(grad_output)
 
 
 class _ReduceFromModelParallelRegion(torch.autograd.Function):
-    """All-redcue the input from the model parallel region."""
+    """All-reduce the input from the model parallel region."""
 
     @staticmethod
+    def symbolic(graph, input_):
+        return _reduce(input_)
+    
+    @staticmethod
     def forward(ctx, input_):
-        ctx.mark_dirty(input_)
         return _reduce(input_)
 
     @staticmethod
@@ -117,6 +118,10 @@ class _ReduceFromModelParallelRegion(torch.autograd.Function):
 
 class _ScatterToModelParallelRegion(torch.autograd.Function):
     """Split the input and keep only the corresponding chuck to the rank."""
+
+    @staticmethod
+    def symbolic(graph, input_):
+        return _split(input_)
 
     @staticmethod
     def forward(ctx, input_):
@@ -131,6 +136,10 @@ class _GatherFromModelParallelRegion(torch.autograd.Function):
     """Gather the input from model parallel region and concatinate."""
 
     @staticmethod
+    def symbolic(graph, input_):
+        return _gather(input_)
+    
+    @staticmethod
     def forward(ctx, input_):
         return _gather(input_)
 
@@ -143,14 +152,17 @@ class _GatherFromModelParallelRegion(torch.autograd.Function):
 # Helper functions.
 # -----------------
 
-def copy_to_model_parallel_region(input_):
+def copy_to_tensor_model_parallel_region(input_):
     return _CopyToModelParallelRegion.apply(input_)
 
-def reduce_from_model_parallel_region(input_):
+
+def reduce_from_tensor_model_parallel_region(input_):
     return _ReduceFromModelParallelRegion.apply(input_)
 
-def scatter_to_model_parallel_region(input_):
+
+def scatter_to_tensor_model_parallel_region(input_):
     return _ScatterToModelParallelRegion.apply(input_)
 
-def gather_from_model_parallel_region(input_):
+
+def gather_from_tensor_model_parallel_region(input_):
     return _GatherFromModelParallelRegion.apply(input_)

@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright (c) 2019, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,24 +13,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from commons import print_separator
+from commons import initialize_distributed
+import mpu
+import torch
 import sys
 sys.path.append("../..")
 
-import torch
-import mpu
 
-from commons import initialize_distributed
-from commons import print_separator
-
-
-def test_set_cuda_rng_state(model_parallel_size):
+def test_set_cuda_rng_state(tensor_model_parallel_size):
 
     if torch.distributed.get_rank() == 0:
         print('> testing set_rng_state with size {} ...'.
-              format(model_parallel_size))
+              format(tensor_model_parallel_size))
 
-    mpu.initialize_model_parallel(model_parallel_size)
-    model_parallel_size = mpu.get_model_parallel_world_size()
+    mpu.initialize_model_parallel(tensor_model_parallel_size)
+    tensor_model_parallel_size = mpu.get_tensor_model_parallel_world_size()
 
     size = 123
     seed = 1234
@@ -85,14 +83,14 @@ def test_set_cuda_rng_state(model_parallel_size):
         print('>> passed the test :-)')
 
 
-def test_cuda_rng_tracker(model_parallel_size):
+def test_cuda_rng_tracker(tensor_model_parallel_size):
 
     if torch.distributed.get_rank() == 0:
         print('> testing cuda rng tracker with size {} ...'.
-              format(model_parallel_size))
+              format(tensor_model_parallel_size))
 
-    mpu.initialize_model_parallel(model_parallel_size)
-    model_parallel_size = mpu.get_model_parallel_world_size()
+    mpu.initialize_model_parallel(tensor_model_parallel_size)
+    tensor_model_parallel_size = mpu.get_tensor_model_parallel_world_size()
 
     seed_1 = 1234
     seed_2 = 4321
@@ -156,20 +154,20 @@ def test_cuda_rng_tracker(model_parallel_size):
         print('>> passed the test :-)')
 
 
-def test_model_parallel_cuda_manual_seed(model_parallel_size):
+def test_model_parallel_cuda_manual_seed(tensor_model_parallel_size):
 
     if torch.distributed.get_rank() == 0:
         print('> testing model parallel cuda manual seed with size {} ...'.
-              format(model_parallel_size))
+              format(tensor_model_parallel_size))
 
-    mpu.initialize_model_parallel(model_parallel_size)
-    model_parallel_size = mpu.get_model_parallel_world_size()
+    mpu.initialize_model_parallel(tensor_model_parallel_size)
+    tensor_model_parallel_size = mpu.get_tensor_model_parallel_world_size()
 
     mpu.model_parallel_cuda_manual_seed(12345)
     assert torch.cuda.initial_seed() == 12345
     with mpu.get_cuda_rng_tracker().fork():
         assert torch.cuda.initial_seed() == (12345 + 2718 +
-                                             mpu.get_model_parallel_rank())
+                                             mpu.get_tensor_model_parallel_rank())
 
     # Reset the tracker
     mpu.get_cuda_rng_tracker().reset()
@@ -187,21 +185,20 @@ if __name__ == '__main__':
     initialize_distributed()
     world_size = torch.distributed.get_world_size()
 
-    model_parallel_size = 1
-    while model_parallel_size <= world_size:
+    tensor_model_parallel_size = 1
+    while tensor_model_parallel_size <= world_size:
         print_separator('test set rng state')
-        test_set_cuda_rng_state(model_parallel_size)
-        model_parallel_size *= 2
+        test_set_cuda_rng_state(tensor_model_parallel_size)
+        tensor_model_parallel_size *= 2
 
-    model_parallel_size = 1
-    while model_parallel_size <= world_size:
+    tensor_model_parallel_size = 1
+    while tensor_model_parallel_size <= world_size:
         print_separator('test cuda rng tracker')
-        test_cuda_rng_tracker(model_parallel_size)
-        model_parallel_size *= 2
+        test_cuda_rng_tracker(tensor_model_parallel_size)
+        tensor_model_parallel_size *= 2
 
-    model_parallel_size = 1
-    while model_parallel_size <= world_size:
+    tensor_model_parallel_size = 1
+    while tensor_model_parallel_size <= world_size:
         print_separator('test model parallel cuda manual seed')
-        test_model_parallel_cuda_manual_seed(model_parallel_size)
-        model_parallel_size *= 2
-
+        test_model_parallel_cuda_manual_seed(tensor_model_parallel_size)
+        tensor_model_parallel_size *= 2
