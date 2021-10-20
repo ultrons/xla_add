@@ -9,7 +9,7 @@ spmd-experiments.py
 
 With these two layers, MP implementation similar to https://arxiv.org/pdf/1909.08053.pdf is feasible.
 
-Use mpu layers, please install the package:
+To use mpu layers, please install the package:
 
 `sudo -H pip install -e .`
 
