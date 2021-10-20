@@ -19,7 +19,7 @@ import random
 import numpy
 import torch
 
-import mpu
+import xla_add.mpu as mpu
 
 
 class IdentityLayer(torch.nn.Module):
@@ -35,7 +35,7 @@ def set_random_seed(seed):
     random.seed(seed)
     numpy.random.seed(seed)
     torch.manual_seed(seed)
-    mpu.model_parallel_cuda_manual_seed(seed)
+    #mpu.model_parallel_cuda_manual_seed(seed)
 
 
 def initialize_distributed(backend='nccl'):

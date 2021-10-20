@@ -30,7 +30,7 @@ from .layers import ColumnParallelLinear
 from .layers import RowParallelLinear
 from .mappings import gather_from_model_parallel_region
 from .random import checkpoint
-from .random import get_cuda_rng_tracker
+#from .random import get_cuda_rng_tracker
 from .utils import divide
 from .utils import split_tensor_along_last_dim
 
@@ -141,8 +141,9 @@ class GPT2ParallelSelfAttention(torch.nn.Module):
         attention_probs = torch.nn.Softmax(dim=-1)(attention_scores)
         # This is actually dropping out entire tokens to attend to, which might
         # seem a bit unusual, but is taken from the original Transformer paper.
-        with get_cuda_rng_tracker().fork():
-            attention_probs = self.attention_dropout(attention_probs)
+        #with get_cuda_rng_tracker().fork():
+        #    attention_probs = self.attention_dropout(attention_probs)
+        attention_probs = self.dropout(attention_probs)
 
         # Context layer.
         # [b, np, s, hn]
@@ -522,8 +523,9 @@ class BertParallelSelfAttention(torch.nn.Module):
         attention_probs = torch.nn.Softmax(dim=-1)(attention_scores)
         # This is actually dropping out entire tokens to attend to, which might
         # seem a bit unusual, but is taken from the original Transformer paper.
-        with get_cuda_rng_tracker().fork():
-            attention_probs = self.dropout(attention_probs)
+        #with get_cuda_rng_tracker().fork():
+            #attention_probs = self.dropout(attention_probs)
+        attention_probs = self.dropout(attention_probs)
 
         # Context layer.
         # [b, np, s, hn]

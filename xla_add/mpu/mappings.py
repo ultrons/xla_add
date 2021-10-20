@@ -34,10 +34,8 @@ def _reduce(input_):
         return input_
 
     # All-reduce.
-    print(f"DEBUG: CORE:{xm.get_ordinal()}: @@@@@@@: XLA ALL REDUCE START: Group", group)
     #xm.all_reduce(xm.REDUCE_SUM, [input_], groups=group[1])
     xm.all_reduce(xm.REDUCE_SUM, [input_], groups=group)
-    print(f"DEBUG: CORE:{xm.get_ordinal()}:@@@@@@@: XLA ALL REDUCE DONE")
 
     return input_
 
@@ -81,10 +79,8 @@ def _gather(input_):
 
     # Note: torch.cat already creates a contiguous tensor.
     #output = torch.cat(tensor_list, dim=last_dim).contiguous()
-    xm.master_print("DEBUG: @@@@@@@: XLA ALL GATHER START")
     #output = xm.all_gather(input_, groups=get_model_parallel_group()[1])
     output = xm.all_gather(input_, groups=get_model_parallel_group())
-    xm.master_print("DEBUG: @@@@@@@: XLA ALL GATHER DONE")
 
     return output
 

@@ -283,7 +283,6 @@ def get_tensor_model_parallel_world_size():
     if _MPU_TENSOR_MODEL_PARALLEL_WORLD_SIZE is not None:
         return _MPU_TENSOR_MODEL_PARALLEL_WORLD_SIZE
     #return torch.distributed.get_world_size(group=get_tensor_model_parallel_group())
-    xm.master_print(f"DEBUG: MODEL_PARALLEL_WORLD_SIZE:{get_tensor_model_parallel_group()}")
 
     return len(get_tensor_model_parallel_group())
 
