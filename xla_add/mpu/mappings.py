@@ -94,7 +94,6 @@ class _CopyToModelParallelRegion(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        print(f"in backward pas for rank: {xm.get_ordinal()}")
         return _reduce(grad_output)
 
 
