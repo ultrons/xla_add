@@ -230,7 +230,7 @@ class ColumnParallelLinearWithAsyncAllreduce(torch.autograd.Function):
         #handle = torch.distributed.all_reduce(
         #        grad_input, group=get_tensor_model_parallel_group(), async_op=True)
         xm.all_reduce(xm.REDUCE_SUM, 
-                grad_input, groups=[get_tensor_model_parallel_group()])
+                grad_input, groups=[get_tensor_model_parallel_group()], pin_layout=False)
         # Delay the start of weight gradient computation shortly (3us) to have
         # all-reduce scheduled first and have GPU resources allocated
         _ = torch.empty(1, device=grad_output.device) + 1

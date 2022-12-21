@@ -35,7 +35,7 @@ def _reduce(input_):
 
     # All-reduce.
     #xm.all_reduce(xm.REDUCE_SUM, [input_], groups=group[1])
-    xm.all_reduce(xm.REDUCE_SUM, [input_], groups=group)
+    xm.all_reduce(xm.REDUCE_SUM, [input_], groups=group, pin_layout=False)
 
     return input_
 
@@ -80,7 +80,7 @@ def _gather(input_):
     # Note: torch.cat already creates a contiguous tensor.
     #output = torch.cat(tensor_list, dim=last_dim).contiguous()
     #output = xm.all_gather(input_, groups=get_model_parallel_group()[1])
-    output = xm.all_gather(input_, groups=get_model_parallel_group())
+    output = xm.all_gather(input_, groups=get_model_parallel_group(), pin_layout=False)
 
     return output
 
